@@ -1,0 +1,12 @@
+{
+  "compilerOptions": {
+    "outDir": "dist/infra",
+    "rootDir": "packages/infra",
+    "module": "commonjs",
+    "target": "ES2020",
+    "strict": true,
+     "skipLibCheck": true,
+    "esModuleInterop": true
+  },
+  "include": ["packages/infra/**/*"]
+}

@@ -1,0 +1,31 @@
+{
+  "name": "gonow-backend",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "npm run build:shared && npm run build:service && npm run build:infra",
+    "build:shared": "tsc -p tsconfig.shared.json",
+    "build:service": "tsc -p tsconfig.service.json",
+    "build:infra": "tsc -p tsconfig.infra.json",
+    "watch": "tsc -b --watch",
+    "clean": "rm -rf dist",
+    "synth": "cdk synth",
+    "deploy": "cdk deploy"
+  },
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.1033.0",
+    "@aws-sdk/client-sfn": "^3.1033.0",
+    "@aws-sdk/lib-dynamodb": "^3.1033.0",
+    "aws-cdk-lib": "^2.150.0",
+    "aws-sdk": "^2.1500.0",
+    "constructs": "^10.0.0",
+    "uuid": "^14.0.0"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.161",
+    "@types/node": "^20.19.39",
+    "@types/uuid": "^11.0.0",
+    "ts-node": "^10.9.1",
+    "typescript": "^5.9.3"
+  }
+}

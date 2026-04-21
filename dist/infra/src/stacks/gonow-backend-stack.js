@@ -59,7 +59,6 @@ class GoNowBackendStack extends aws_cdk_lib_1.Stack {
         const baseEnv = {
             TRIPS_TABLE_NAME: tripsTable.tableName,
             RESULTS_TABLE_NAME: resultsTable.tableName,
-            TRIP_PLANNER_STATE_MACHINE_ARN: 'PLACEHOLDER_REPLACED_AFTER_CREATION'
         };
         const serviceCodePath = '../service/dist';
         const createTripFn = new lambda.Function(this, 'CreateTripFunction', {
@@ -184,9 +183,9 @@ class GoNowBackendStack extends aws_cdk_lib_1.Stack {
             }
         });
         createTripFn.addEnvironment('TRIP_PLANNER_STATE_MACHINE_ARN', stateMachine.stateMachineArn);
-        getTripFn.addEnvironment('TRIP_PLANNER_STATE_MACHINE_ARN', stateMachine.stateMachineArn);
-        finalizeFn.addEnvironment('TRIP_PLANNER_STATE_MACHINE_ARN', stateMachine.stateMachineArn);
-        failFn.addEnvironment('TRIP_PLANNER_STATE_MACHINE_ARN', stateMachine.stateMachineArn);
+        // getTripFn.addEnvironment('TRIP_PLANNER_STATE_MACHINE_ARN', stateMachine.stateMachineArn);
+        // finalizeFn.addEnvironment('TRIP_PLANNER_STATE_MACHINE_ARN', stateMachine.stateMachineArn);
+        // failFn.addEnvironment('TRIP_PLANNER_STATE_MACHINE_ARN', stateMachine.stateMachineArn);
         stateMachine.grantStartExecution(createTripFn);
         const httpApi = new apigwv2.HttpApi(this, 'GoNowHttpApi', {
             apiName: 'gonow-api'

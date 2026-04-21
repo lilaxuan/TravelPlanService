@@ -1,12 +1,12 @@
 {
   "compilerOptions": {
     "outDir": "dist/service",
-    "rootDir": "packages",
+    "rootDir": "",
     "module": "commonjs",
     "target": "ES2020",
     "strict": true,
     "skipLibCheck": true,
     "esModuleInterop": true
   },
-  "include": ["packages/service/**/*"]
+  "include": ["service/**/*"]
 }

@@ -23,8 +23,25 @@ npm run build
 
 ## Deploy
 ```bash
-cd infra
+// Go to the dir where the app.js is built in dist
+cd ..
 npx cdk bootstrap aws://766796016263/us-west-2
+
+cd packages/shared
+npm run build
+
+cd ../service
+npm run build
+
+cd ../infra
+npm run build
+
+// set up the AWS credential
+aws configure
+aws sts-get-identity
+npm install -g aws-cdk
+cdk bootstrap
+
 npx cdk deploy GoNowBackendStack --require-approval never
 ```
 

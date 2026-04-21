@@ -1,0 +1,272 @@
+{
+  "/GoNowBackendStack/HttpApiUrl": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "HttpApiUrl"
+    }
+  ],
+  "/GoNowBackendStack/TripsTableName": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "TripsTableName"
+    }
+  ],
+  "/GoNowBackendStack/ResultsTableName": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "ResultsTableName"
+    }
+  ],
+  "/GoNowBackendStack/TripPlannerStateMachineArn": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "TripPlannerStateMachineArn"
+    }
+  ],
+  "/GoNowBackendStack/BootstrapVersion": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "BootstrapVersion"
+    }
+  ],
+  "/GoNowBackendStack/CheckBootstrapVersion": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "CheckBootstrapVersion"
+    }
+  ],
+  "/GoNowBackendStack/TripsTable/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "TripsTable02533942"
+    }
+  ],
+  "/GoNowBackendStack/TripResultsTable/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "TripResultsTable04B3234F"
+    }
+  ],
+  "/GoNowBackendStack/CreateTripFunction/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "CreateTripFunction51DBEDEB"
+    }
+  ],
+  "/GoNowBackendStack/GetTripFunction/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "GetTripFunctionB56340BA"
+    }
+  ],
+  "/GoNowBackendStack/PlanFlightsFunction/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "PlanFlightsFunctionBC8BFEF6"
+    }
+  ],
+  "/GoNowBackendStack/PlanHotelsFunction/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "PlanHotelsFunctionB204AF9E"
+    }
+  ],
+  "/GoNowBackendStack/PlanCarRentalsFunction/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "PlanCarRentalsFunctionDCA30410"
+    }
+  ],
+  "/GoNowBackendStack/PlanItineraryFunction/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "PlanItineraryFunction2AAFD30E"
+    }
+  ],
+  "/GoNowBackendStack/PlanRestaurantsFunction/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "PlanRestaurantsFunctionEB43E285"
+    }
+  ],
+  "/GoNowBackendStack/PlanTravelTipsFunction/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "PlanTravelTipsFunction6B510314"
+    }
+  ],
+  "/GoNowBackendStack/FinalizeTripFunction/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "FinalizeTripFunctionA390DDD6"
+    }
+  ],
+  "/GoNowBackendStack/MarkTripFailedFunction/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "MarkTripFailedFunctionA1157FB5"
+    }
+  ],
+  "/GoNowBackendStack/TripPlannerLogs/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "TripPlannerLogs0ECBE0C9"
+    }
+  ],
+  "/GoNowBackendStack/TripPlannerStateMachine/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "TripPlannerStateMachine00802C9A"
+    }
+  ],
+  "/GoNowBackendStack/GoNowHttpApi/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "GoNowHttpApiB94A1BBE"
+    }
+  ],
+  "/GoNowBackendStack/CDKMetadata/Default": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "CDKMetadata"
+    }
+  ],
+  "/GoNowBackendStack/CreateTripFunction/ServiceRole/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "CreateTripFunctionServiceRoleA49BD923"
+    }
+  ],
+  "/GoNowBackendStack/GetTripFunction/ServiceRole/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "GetTripFunctionServiceRole3FB15956"
+    }
+  ],
+  "/GoNowBackendStack/PlanFlightsFunction/ServiceRole/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "PlanFlightsFunctionServiceRoleD399FD70"
+    }
+  ],
+  "/GoNowBackendStack/PlanHotelsFunction/ServiceRole/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "PlanHotelsFunctionServiceRoleFF62CF04"
+    }
+  ],
+  "/GoNowBackendStack/PlanCarRentalsFunction/ServiceRole/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "PlanCarRentalsFunctionServiceRole3AD9AE87"
+    }
+  ],
+  "/GoNowBackendStack/PlanItineraryFunction/ServiceRole/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "PlanItineraryFunctionServiceRoleEEC3B970"
+    }
+  ],
+  "/GoNowBackendStack/PlanRestaurantsFunction/ServiceRole/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "PlanRestaurantsFunctionServiceRole36BE265E"
+    }
+  ],
+  "/GoNowBackendStack/PlanTravelTipsFunction/ServiceRole/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "PlanTravelTipsFunctionServiceRole48BCAE44"
+    }
+  ],
+  "/GoNowBackendStack/FinalizeTripFunction/ServiceRole/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "FinalizeTripFunctionServiceRoleC9A6E217"
+    }
+  ],
+  "/GoNowBackendStack/MarkTripFailedFunction/ServiceRole/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "MarkTripFailedFunctionServiceRoleDD70019D"
+    }
+  ],
+  "/GoNowBackendStack/TripPlannerStateMachine/Role/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "TripPlannerStateMachineRole04792C5E"
+    }
+  ],
+  "/GoNowBackendStack/GoNowHttpApi/DefaultStage/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "GoNowHttpApiDefaultStage6E6112B9"
+    }
+  ],
+  "/GoNowBackendStack/GoNowHttpApi/POST--trips/CreateTripIntegration-Permission": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "GoNowHttpApiPOSTtripsCreateTripIntegrationPermission5CA6FEC1"
+    }
+  ],
+  "/GoNowBackendStack/GoNowHttpApi/POST--trips/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "GoNowHttpApiPOSTtrips55AD1D99"
+    }
+  ],
+  "/GoNowBackendStack/GoNowHttpApi/GET--trips--{tripId}/GetTripIntegration-Permission": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "GoNowHttpApiGETtripstripIdGetTripIntegrationPermission4CF06827"
+    }
+  ],
+  "/GoNowBackendStack/GoNowHttpApi/GET--trips--{tripId}/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "GoNowHttpApiGETtripstripId81FC0D6E"
+    }
+  ],
+  "/GoNowBackendStack/CreateTripFunction/ServiceRole/DefaultPolicy/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "CreateTripFunctionServiceRoleDefaultPolicyFC218208"
+    }
+  ],
+  "/GoNowBackendStack/GetTripFunction/ServiceRole/DefaultPolicy/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "GetTripFunctionServiceRoleDefaultPolicy441B76FE"
+    }
+  ],
+  "/GoNowBackendStack/FinalizeTripFunction/ServiceRole/DefaultPolicy/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "FinalizeTripFunctionServiceRoleDefaultPolicyA32682BE"
+    }
+  ],
+  "/GoNowBackendStack/MarkTripFailedFunction/ServiceRole/DefaultPolicy/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "MarkTripFailedFunctionServiceRoleDefaultPolicy44479243"
+    }
+  ],
+  "/GoNowBackendStack/TripPlannerStateMachine/Role/DefaultPolicy/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "TripPlannerStateMachineRoleDefaultPolicy98056E2C"
+    }
+  ],
+  "/GoNowBackendStack/GoNowHttpApi/POST--trips/CreateTripIntegration/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "GoNowHttpApiPOSTtripsCreateTripIntegrationF79F477A"
+    }
+  ],
+  "/GoNowBackendStack/GoNowHttpApi/GET--trips--{tripId}/GetTripIntegration/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "GoNowHttpApiGETtripstripIdGetTripIntegration80B0819B"
+    }
+  ]
+}

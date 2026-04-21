@@ -1,7 +1,6 @@
 {
   "name": "@gonow/infra",
   "version": "0.1.0",
-  "type": "module",
   "main": "dist/app.js",
   "types": "dist/app.d.ts",
   "scripts": {

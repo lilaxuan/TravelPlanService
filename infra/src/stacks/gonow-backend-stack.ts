@@ -2,6 +2,8 @@ import { Duration, RemovalPolicy, Stack, StackProps, CfnOutput } from 'aws-cdk-l
 import { Construct } from 'constructs';
 import * as apigwv2 from 'aws-cdk-lib/aws-apigatewayv2';
 import * as apigwIntegrations from 'aws-cdk-lib/aws-apigatewayv2-integrations';
+import { HttpJwtAuthorizer } from 'aws-cdk-lib/aws-apigatewayv2-authorizers';
+import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
@@ -23,6 +25,41 @@ export class GoNowBackendStack extends Stack {
       partitionKey: { name: 'tripId', type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       removalPolicy: RemovalPolicy.DESTROY
+    });
+
+    const tripCacheTable = new dynamodb.Table(this, 'TripGenerationCacheTable', {
+      partitionKey: { name: 'cacheKey', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      timeToLiveAttribute: 'expiresAt',
+      removalPolicy: RemovalPolicy.DESTROY
+    });
+
+    // ── Users table (single-table: profile + preferences + trip history) ──
+    const usersTable = new dynamodb.Table(this, 'UsersTable', {
+      partitionKey: { name: 'PK', type: dynamodb.AttributeType.STRING },
+      sortKey:      { name: 'SK', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      removalPolicy: RemovalPolicy.RETAIN,
+    });
+    // GSI: look up user by email
+    usersTable.addGlobalSecondaryIndex({
+      indexName: 'email-index',
+      partitionKey: { name: 'email', type: dynamodb.AttributeType.STRING },
+      projectionType: dynamodb.ProjectionType.KEYS_ONLY,
+    });
+
+    // ── Cognito User Pool ──────────────────────────────────────────────────
+    const userPool = new cognito.UserPool(this, 'GoNowUserPool', {
+      selfSignUpEnabled: true,
+      signInAliases: { email: true },
+      autoVerify: { email: true },
+      passwordPolicy: { minLength: 8, requireSymbols: false },
+      removalPolicy: RemovalPolicy.DESTROY,
+    });
+
+    const userPoolClient = userPool.addClient('GoNowWebClient', {
+      authFlows: { userPassword: true, userSrp: true },
+      generateSecret: false,
     });
 
     const nodeRuntime = lambda.Runtime.NODEJS_20_X;
@@ -122,12 +159,12 @@ export class GoNowBackendStack extends Stack {
         budget: sfn.JsonPath.numberAt('$.budget'),
         travelers: sfn.JsonPath.numberAt('$.travelers'),
         preferences: sfn.JsonPath.objectAt('$.preferences'),
-        flightPlan: sfn.JsonPath.objectAt('$.flightPlan.Payload'),
-        hotelPlan: sfn.JsonPath.objectAt('$.hotelPlan.Payload'),
-        carPlan: sfn.JsonPath.objectAt('$.carPlan.Payload'),
-        itineraryPlan: sfn.JsonPath.objectAt('$.itineraryPlan.Payload'),
-        restaurantPlan: sfn.JsonPath.objectAt('$.restaurantPlan.Payload'),
-        tipsPlan: sfn.JsonPath.objectAt('$.tipsPlan.Payload')
+        flightPlan: sfn.JsonPath.objectAt('$.plannerResults[0].flightPlan.Payload'),
+        hotelPlan: sfn.JsonPath.objectAt('$.plannerResults[1].hotelPlan.Payload'),
+        carPlan: sfn.JsonPath.objectAt('$.plannerResults[2].carPlan.Payload'),
+        itineraryPlan: sfn.JsonPath.objectAt('$.plannerResults[3].itineraryPlan.Payload'),
+        restaurantPlan: sfn.JsonPath.objectAt('$.plannerResults[4].restaurantPlan.Payload'),
+        tipsPlan: sfn.JsonPath.objectAt('$.plannerResults[5].tipsPlan.Payload')
       }),
       outputPath: '$.Payload'
     });
@@ -141,21 +178,22 @@ export class GoNowBackendStack extends Stack {
       outputPath: '$.Payload'
     });
 
-    planFlights.addCatch(fail, { resultPath: '$.errorInfo' });
-    planHotels.addCatch(fail, { resultPath: '$.errorInfo' });
-    planCar.addCatch(fail, { resultPath: '$.errorInfo' });
-    planItinerary.addCatch(fail, { resultPath: '$.errorInfo' });
-    planRestaurants.addCatch(fail, { resultPath: '$.errorInfo' });
-    planTips.addCatch(fail, { resultPath: '$.errorInfo' });
     finalize.addCatch(fail, { resultPath: '$.errorInfo' });
 
-    const definition = planFlights
-      .next(planHotels)
-      .next(planCar)
-      .next(planItinerary)
-      .next(planRestaurants)
-      .next(planTips)
-      .next(finalize);
+    const parallelPlanning = new sfn.Parallel(this, 'Plan Trip Sections In Parallel', {
+      resultPath: '$.plannerResults'
+    });
+
+    parallelPlanning
+      .branch(planFlights)
+      .branch(planHotels)
+      .branch(planCar)
+      .branch(planItinerary)
+      .branch(planRestaurants)
+      .branch(planTips);
+    parallelPlanning.addCatch(fail, { resultPath: '$.errorInfo' });
+
+    const definition = parallelPlanning.next(finalize);
 
     const logGroup = new logs.LogGroup(this, 'TripPlannerLogs', {
       retention: logs.RetentionDays.ONE_WEEK,
@@ -178,7 +216,19 @@ export class GoNowBackendStack extends Stack {
     stateMachine.grantStartExecution(createTripFn);
 
     const httpApi = new apigwv2.HttpApi(this, 'GoNowHttpApi', {
-      apiName: 'gonow-api'
+      apiName: 'gonow-api',
+      corsPreflight: {
+        allowOrigins: ['*'],
+        allowMethods: [
+          apigwv2.CorsHttpMethod.GET,
+          apigwv2.CorsHttpMethod.POST,
+          apigwv2.CorsHttpMethod.PUT,
+          apigwv2.CorsHttpMethod.DELETE,
+          apigwv2.CorsHttpMethod.OPTIONS,
+        ],
+        allowHeaders: ['authorization', 'content-type'],
+        maxAge: Duration.hours(1),
+      },
     });
 
     httpApi.addRoutes({
@@ -197,6 +247,94 @@ export class GoNowBackendStack extends Stack {
     new CfnOutput(this, 'TripsTableName', { value: tripsTable.tableName });
     new CfnOutput(this, 'ResultsTableName', { value: resultsTable.tableName });
     new CfnOutput(this, 'TripPlannerStateMachineArn', { value: stateMachine.stateMachineArn });
+
+    // ── User Lambda handlers ───────────────────────────────────────────────
+    const userEnv = {
+      USERS_TABLE_NAME: usersTable.tableName,
+      USER_POOL_ID: userPool.userPoolId,
+    };
+
+    const generateTripFn = new lambda.Function(this, 'GenerateTripFunction', {
+      runtime: nodeRuntime,
+      handler: 'handlers/generateTrip.handler',
+      code: lambda.Code.fromAsset(serviceCodePath),
+      timeout: Duration.seconds(60),
+      environment: {
+        RESULTS_TABLE_NAME: resultsTable.tableName,
+        TRIP_CACHE_TABLE_NAME: tripCacheTable.tableName,
+        TRIP_CACHE_TTL_SECONDS: '86400',
+        OPENAI_MODEL: 'gpt-4o-mini',
+        OPENAI_SECTION_TIMEOUT_MS: '18000',
+        OPENAI_API_KEY: process.env.OPENAI_API_KEY ?? '',
+      },
+    });
+    resultsTable.grantReadWriteData(generateTripFn);
+    tripCacheTable.grantReadWriteData(generateTripFn);
+
+    httpApi.addRoutes({
+      path: '/generate',
+      methods: [apigwv2.HttpMethod.POST],
+      integration: new apigwIntegrations.HttpLambdaIntegration('GenerateTripIntegration', generateTripFn),
+    });
+
+    const getUserProfileFn = new lambda.Function(this, 'GetUserProfileFunction', {
+      runtime: nodeRuntime,
+      handler: 'handlers/getUserProfile.handler',
+      code: lambda.Code.fromAsset(serviceCodePath),
+      timeout: Duration.seconds(10),
+      environment: userEnv,
+    });
+
+    const putUserPreferencesFn = new lambda.Function(this, 'PutUserPreferencesFunction', {
+      runtime: nodeRuntime,
+      handler: 'handlers/putUserPreferences.handler',
+      code: lambda.Code.fromAsset(serviceCodePath),
+      timeout: Duration.seconds(10),
+      environment: userEnv,
+    });
+
+    usersTable.grantReadWriteData(getUserProfileFn);
+    usersTable.grantReadWriteData(putUserPreferencesFn);
+
+    // Cognito JWT authorizer
+    const authorizer = new HttpJwtAuthorizer('CognitoAuthorizer',
+      `https://cognito-idp.${this.region}.amazonaws.com/${userPool.userPoolId}`,
+      { jwtAudience: [userPoolClient.userPoolClientId] }
+    );
+
+    httpApi.addRoutes({
+      path: '/users/me',
+      methods: [apigwv2.HttpMethod.GET],
+      integration: new apigwIntegrations.HttpLambdaIntegration('GetUserProfileIntegration', getUserProfileFn),
+      authorizer,
+    });
+
+    httpApi.addRoutes({
+      path: '/users/me/preferences',
+      methods: [apigwv2.HttpMethod.PUT],
+      integration: new apigwIntegrations.HttpLambdaIntegration('PutUserPreferencesIntegration', putUserPreferencesFn),
+      authorizer,
+    });
+
+    // ── Public stats endpoint (signup counter) ────────────────────────────
+    const getStatsFn = new lambda.Function(this, 'GetStatsFunction', {
+      runtime: nodeRuntime,
+      handler: 'handlers/getStats.handler',
+      code: lambda.Code.fromAsset(serviceCodePath),
+      timeout: Duration.seconds(5),
+      environment: userEnv,
+    });
+    usersTable.grantReadData(getStatsFn);
+
+    httpApi.addRoutes({
+      path: '/stats',
+      methods: [apigwv2.HttpMethod.GET],
+      integration: new apigwIntegrations.HttpLambdaIntegration('GetStatsIntegration', getStatsFn),
+    });
+
+    new CfnOutput(this, 'UserPoolId', { value: userPool.userPoolId });
+    new CfnOutput(this, 'UserPoolClientId', { value: userPoolClient.userPoolClientId });
+    new CfnOutput(this, 'UsersTableName', { value: usersTable.tableName });
   }
 
   private createPlannerFunction(id: string, handler: string, codePath: string, environment: Record<string, string>): lambda.Function {

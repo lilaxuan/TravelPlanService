@@ -3,7 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.handler = void 0;
 const client_sfn_1 = require("@aws-sdk/client-sfn");
 const src_1 = require("../../../shared/src");
-const uuid_1 = require("uuid");
+const node_crypto_1 = require("node:crypto");
 const config_js_1 = require("../config.js");
 const tripsRepository_js_1 = require("../repositories/tripsRepository.js");
 const stepFunctions_js_1 = require("../clients/stepFunctions.js");
@@ -15,7 +15,7 @@ const handler = async (event) => {
         const input = body;
         const config = (0, config_js_1.loadConfig)();
         const repository = new tripsRepository_js_1.TripsRepository(config.tripsTableName, config.resultsTableName);
-        const tripId = (0, uuid_1.v4)();
+        const tripId = (0, node_crypto_1.randomUUID)();
         const now = new Date().toISOString();
         const record = {
             tripId,

@@ -1,7 +1,7 @@
 import type { APIGatewayProxyHandlerV2 } from 'aws-lambda';
 import { StartExecutionCommand } from '@aws-sdk/client-sfn';
 import { assertCreateTripRequest, type CreateTripRequest, type TripRecord } from '../../../shared/src';
-import { v4 as uuidv4 } from 'uuid';
+import { randomUUID } from 'node:crypto';
 import { loadConfig } from '../config.js';
 import { TripsRepository } from '../repositories/tripsRepository.js';
 import { sfn } from '../clients/stepFunctions.js';
@@ -15,7 +15,7 @@ export const handler: APIGatewayProxyHandlerV2 = async (event: any) => {
     const config = loadConfig();
     const repository = new TripsRepository(config.tripsTableName, config.resultsTableName);
 
-    const tripId = uuidv4();
+    const tripId = randomUUID();
     const now = new Date().toISOString();
 
     const record: TripRecord = {

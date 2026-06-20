@@ -1,13 +1,14 @@
 import type { APIGatewayProxyHandlerV2 } from 'aws-lambda';
 import { GetCommand, PutCommand } from '@aws-sdk/lib-dynamodb';
 import { randomUUID } from 'node:crypto';
+import { getAmadeusLogistics, ProviderConfigurationError } from '../clients/amadeus.js';
 import { ddb } from '../clients/dynamo.js';
 import { jsonResponse } from '../utils/response.js';
 
 const RESULTS_TABLE = process.env.RESULTS_TABLE_NAME!;
 const TRIP_CACHE_TABLE = process.env.TRIP_CACHE_TABLE_NAME;
 const CACHE_TTL_SECONDS = Number(process.env.TRIP_CACHE_TTL_SECONDS ?? 86_400);
-const OPENAI_SECTION_TIMEOUT_MS = Number(process.env.OPENAI_SECTION_TIMEOUT_MS ?? 18_000);
+const OPENAI_SECTION_TIMEOUT_MS = Number(process.env.OPENAI_SECTION_TIMEOUT_MS ?? 1_000);
 
 interface TripInput {
   departureCity: string;
@@ -48,25 +49,6 @@ Trip details:
 - Travelers: ${input.travelers}`;
 }
 
-function buildLogisticsPrompt(input: TripInput): string {
-  return `${baseTripContext(input)}
-
-Return JSON matching:
-{
-  "departureIata": string,
-  "destinationIata": string,
-  "flights": [{ "airline": string, "flightNumber": string, "departure": string, "arrival": string, "estimatedPrice": number, "duration": string, "stops": string }],
-  "hotels": [{ "name": string, "area": string, "estimatedNightlyPrice": number, "totalEstimatedPrice": number, "starRating": number, "highlights": string }],
-  "carRentals": [{ "provider": string, "estimatedTotalPrice": number, "pickupLocation": string, "bookingUrl": string }],
-  "costSummary": { "flights": number, "hotels": number, "carRental": number, "foodEstimate": number, "activitiesEstimate": number, "total": number }
-}
-Requirements:
-- Include 2-3 realistic flight options with real airline names, plausible flight numbers, and departure/arrival times
-- Include 2-3 real well-known hotels with accurate star ratings and notable highlights
-- Include 2-3 car rental options from different providers (Enterprise, Hertz, Budget, Avis)
-- Keep total cost within $${input.budget} budget where possible`;
-}
-
 function buildItineraryPrompt(input: TripInput): string {
   const nights = tripLengthInNights(input.startDate, input.endDate);
 
@@ -102,77 +84,6 @@ Return JSON matching:
 }
 Requirements:
 - Include weather summary, clothing recommendations, visa requirements, local transportation notes, and pre-travel reminders`;
-}
-
-function buildFallbackItinerary(input: TripInput): Array<Record<string, unknown>> {
-  const days = tripLengthInNights(input.startDate, input.endDate);
-  return Array.from({ length: days }, (_, index) => {
-    const dayNumber = index + 1;
-    return {
-      dayNumber,
-      theme: dayNumber === 1 ? `${input.destinationCity} essentials` : `${input.destinationCity} neighborhoods and local flavor`,
-      activities: [
-        {
-          time: '09:00',
-          name: dayNumber === 1 ? `${input.destinationCity} downtown orientation` : `${input.destinationCity} neighborhood walk`,
-          type: 'attraction',
-          notes: 'Start with a central, easy-to-reach area and adjust based on weather and opening hours.',
-          transportFromPrevious: 'Start from hotel',
-        },
-        {
-          time: '12:30',
-          name: 'Local lunch stop',
-          type: 'restaurant',
-          notes: 'Choose a well-reviewed casual restaurant near the morning activity.',
-          transportFromPrevious: '10-15 min walk or short ride',
-        },
-        {
-          time: '14:30',
-          name: dayNumber === 1 ? 'Signature museum or landmark' : 'Park, market, or waterfront time',
-          type: 'attraction',
-          notes: 'Reserve tickets ahead if the attraction requires timed entry.',
-          transportFromPrevious: '15-25 min by public transit or rideshare',
-        },
-        {
-          time: '18:30',
-          name: 'Dinner in a popular dining district',
-          type: 'restaurant',
-          notes: 'Make a reservation if traveling on a weekend.',
-          transportFromPrevious: '15-20 min from afternoon stop',
-        },
-      ],
-    };
-  });
-}
-
-function buildFallbackRestaurants(input: TripInput): Array<Record<string, unknown>> {
-  return [
-    {
-      name: `${input.destinationCity} local favorite`,
-      cuisine: 'Regional',
-      priceRange: '$$',
-      reservationRecommended: true,
-      photoQuery: `${input.destinationCity} popular restaurant`,
-    },
-    {
-      name: `${input.destinationCity} casual lunch spot`,
-      cuisine: 'Casual',
-      priceRange: '$',
-      reservationRecommended: false,
-      photoQuery: `${input.destinationCity} lunch`,
-    },
-  ];
-}
-
-function buildFallbackTravelTips(input: TripInput): Record<string, unknown> {
-  return {
-    bestSeasonSummary: `Check current seasonal conditions for ${input.destinationCity} before departure.`,
-    visaGuidance: 'Confirm ID, visa, and entry requirements based on your citizenship and route.',
-    localTip: 'Keep a flexible first day and verify opening hours before heading out.',
-    weatherSummary: 'Review the local forecast 48 hours before departure.',
-    clothingRecommendations: 'Pack comfortable walking shoes and layers.',
-    preTravelReminders: ['Confirm bookings', 'Check transit from the airport or station', 'Save offline maps'],
-  };
 }
 
 async function requestJsonSection<T extends Record<string, unknown>>(apiKey: string, prompt: string): Promise<T> {
@@ -263,44 +174,37 @@ async function putCachedPayload(cacheKey: string, result: GeneratedTripPayload):
 
 async function generateTripPayload(apiKey: string, input: TripInput): Promise<GeneratedTripPayload> {
   const [logisticsResult, itineraryResult, restaurantsResult, tipsResult] = await Promise.allSettled([
-    requestJsonSection<Record<string, unknown>>(apiKey, buildLogisticsPrompt(input)),
+    getAmadeusLogistics(input),
     requestJsonSection<Record<string, unknown>>(apiKey, buildItineraryPrompt(input)),
     requestJsonSection<Record<string, unknown>>(apiKey, buildRestaurantsPrompt(input)),
     requestJsonSection<Record<string, unknown>>(apiKey, buildTipsPrompt(input)),
   ]);
 
   const warnings: string[] = [];
+  if (logisticsResult.status === 'rejected') throw logisticsResult.reason;
+  warnings.push(...logisticsResult.value.warnings);
+
   function sectionValue(result: PromiseSettledResult<Record<string, unknown>>, sectionName: string): Record<string, unknown> {
     if (result.status === 'fulfilled') return result.value;
-    warnings.push(`${sectionName} generation timed out or failed; returned fallback data for that section.`);
+    warnings.push(`${sectionName} generation timed out or failed; no generated ${sectionName.toLowerCase()} was returned.`);
     console.warn(`${sectionName} generation failed`, result.reason);
     return {};
   }
 
-  const logistics = sectionValue(logisticsResult, 'Logistics');
   const itinerary = sectionValue(itineraryResult, 'Itinerary');
   const restaurants = sectionValue(restaurantsResult, 'Restaurants');
   const tips = sectionValue(tipsResult, 'Travel tips');
 
-  const fallbackCostSummary = {
-    flights: Math.round(input.budget * 0.3),
-    hotels: Math.round(input.budget * 0.35),
-    carRental: Math.round(input.budget * 0.12),
-    foodEstimate: Math.round(input.budget * 0.15),
-    activitiesEstimate: Math.round(input.budget * 0.08),
-    total: input.budget,
-  };
-
   return {
-    departureIata: logistics.departureIata as string | undefined,
-    destinationIata: logistics.destinationIata as string | undefined,
-    flights: Array.isArray(logistics.flights) ? logistics.flights : [],
-    hotels: Array.isArray(logistics.hotels) ? logistics.hotels : [],
-    carRentals: Array.isArray(logistics.carRentals) ? logistics.carRentals : [],
-    itinerary: Array.isArray(itinerary.itinerary) ? itinerary.itinerary : buildFallbackItinerary(input),
-    restaurants: Array.isArray(restaurants.restaurants) ? restaurants.restaurants : buildFallbackRestaurants(input),
-    travelTips: (tips.travelTips && typeof tips.travelTips === 'object') ? tips.travelTips as Record<string, unknown> : buildFallbackTravelTips(input),
-    costSummary: (logistics.costSummary && typeof logistics.costSummary === 'object') ? logistics.costSummary as Record<string, unknown> : fallbackCostSummary,
+    departureIata: logisticsResult.value.departureIata,
+    destinationIata: logisticsResult.value.destinationIata,
+    flights: logisticsResult.value.flights,
+    hotels: logisticsResult.value.hotels,
+    carRentals: logisticsResult.value.carRentals,
+    itinerary: Array.isArray(itinerary.itinerary) ? itinerary.itinerary : [],
+    restaurants: Array.isArray(restaurants.restaurants) ? restaurants.restaurants : [],
+    travelTips: (tips.travelTips && typeof tips.travelTips === 'object') ? tips.travelTips as Record<string, unknown> : {},
+    costSummary: logisticsResult.value.costSummary,
     warnings,
   };
 }
@@ -353,6 +257,10 @@ export const handler: APIGatewayProxyHandlerV2 = async (event) => {
 
     return jsonResponse(200, result);
   } catch (error) {
+    if (error instanceof ProviderConfigurationError) {
+      return jsonResponse(error.statusCode, { error: error.message });
+    }
+
     return jsonResponse(500, { error: error instanceof Error ? error.message : 'Unknown error' });
   }
 };

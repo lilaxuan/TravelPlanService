@@ -6,13 +6,82 @@
 
 ## Overview
 
-Serverless TypeScript backend deployed on AWS. Exposes an HTTP API that generates AI-powered travel plans. The primary path is `POST /generate` (checks DynamoDB cache, runs parallel OpenAI section prompts on cache miss, persists to DynamoDB, returns synchronously). A secondary Step Functions–based rule-based planner (`POST /trips`) also exists and runs independent planning sections in parallel.
+Serverless TypeScript backend deployed on AWS. Exposes an HTTP API that generates AI-powered travel plans. The primary path is `POST /generate` (checks DynamoDB cache, calls Amadeus for real flight and hotel offers, opportunistically uses AI for itinerary/restaurants/tips, persists to DynamoDB, returns synchronously). A secondary Step Functions–based planner (`POST /trips`) exists for asynchronous progressive planning.
 
 **AWS Account:** `766796016263`  
-**Region:** `us-west-2`  
+**Region:** `us-east-1`  
 **CDK Stack:** `GoNowBackendStack`
 
 ---
+
+## Product Architecture Goal
+
+GoNow should save users more than 90% of trip-planning time by separating facts from intelligence:
+
+- **Facts:** flight and hotel inventory must come from real provider APIs. The backend must not ask AI to invent flight numbers, hotel availability, or rental inventory.
+- **Intelligence:** AI ranks, explains, bundles, and creates itinerary strategy from user preferences plus factual options.
+- **Latency:** the first useful response should arrive in 2-5 seconds. Deeper AI enrichment can continue asynchronously.
+
+Target user outcomes:
+- Enter one form instead of opening 10-20 travel tabs.
+- See route, lodging, car, itinerary, restaurant, cost, and reminder sections in one workspace.
+- Understand why options fit the budget, arrival time, neighborhood, and travel style.
+- Continue planning even if one provider is slow, because sections resolve independently.
+
+### Target Infrastructure
+
+```
+Console SPA
+  ├── POST /generate          # fast synchronous result for current wizard
+  ├── POST /trips             # async progressive planning job
+  └── GET /trips/{tripId}     # poll partial sections
+
+API Gateway HTTP API
+  ├── GenerateTripFunction
+  │   ├── DynamoDB exact-request cache
+  │   ├── TravelProviderGateway
+  │   │   ├── Flights provider: Amadeus MVP
+  │   │   ├── Hotels provider: Amadeus MVP
+  │   │   └── Cars provider: not configured in MVP
+  │   └── AI Planning Layer: itinerary, ranking, summaries, tips
+  └── Step Functions TripPlannerStateMachine
+      ├── PlanFlights
+      ├── PlanHotels
+      ├── PlanCars
+      ├── PlanItinerary
+      ├── PlanRestaurants
+      └── FinalizeTrip
+
+DynamoDB
+  ├── TripsTable              # request + section statuses
+  ├── TripResultsTable        # persisted full/partial trip results
+  └── TripGenerationCacheTable# provider/AI cache entries
+```
+
+Provider integration rules:
+- Use Amadeus for real-time flight offers and hotel offers in the MVP.
+- If Amadeus credentials are missing, `/generate` returns HTTP 503 instead of fake data.
+- Never display fabricated flight numbers, hotel names, or rental inventory as if confirmed.
+- Car rental inventory is explicitly empty in the MVP until a real car provider is configured.
+- Cache provider results with short TTLs: flights 5-15 min, hotels/cars 15-60 min, AI itinerary 24 hours if based on same factual options.
+
+### Progressive UX Contract
+
+The long-term `/trips` flow should return `tripId` immediately, then expose section-level statuses:
+
+```json
+{
+  "status": "PLANNING",
+  "sections": {
+    "flights": "COMPLETED",
+    "hotels": "PLANNING",
+    "carRentals": "PLANNING",
+    "itinerary": "PLANNING"
+  }
+}
+```
+
+The Console should show completed sections immediately instead of blocking the whole trip on the slowest provider or AI call.
 
 ## Repository Layout
 
@@ -56,7 +125,7 @@ All use **Node.js 20.x**. Code loaded from `../service/dist` at deploy time.
 
 | Function | Handler file | Timeout | Key env vars |
 |----------|-------------|---------|--------------|
-| GenerateTripFunction | `handlers/generateTrip.ts` | 60 s | `RESULTS_TABLE_NAME`, `OPENAI_API_KEY` |
+| GenerateTripFunction | `handlers/generateTrip.ts` | 60 s | `RESULTS_TABLE_NAME`, `TRIP_CACHE_TABLE_NAME`, `OPENAI_API_KEY`, `AMADEUS_CLIENT_ID`, `AMADEUS_CLIENT_SECRET`, `OPENAI_MODEL`, `OPENAI_SECTION_TIMEOUT_MS` |
 | CreateTripFunction | `handlers/createTrip.ts` | 15 s | `TRIPS_TABLE_NAME`, `RESULTS_TABLE_NAME`, `TRIP_PLANNER_STATE_MACHINE_ARN` |
 | GetTripFunction | `handlers/getTrip.ts` | 10 s | `TRIPS_TABLE_NAME`, `RESULTS_TABLE_NAME` |
 | GetUserProfileFunction | `handlers/getUserProfile.ts` | 10 s | `USERS_TABLE_NAME`, `USER_POOL_ID` |
@@ -106,25 +175,37 @@ Any branch or finalize failure routes to `MarkTripFailed` via `.addCatch`.
 1. Validates required fields: `departureCity`, `destinationCity`, `startDate`, `endDate`, `budget`, `travelers`
 2. Normalizes the trip request and hashes it into a deterministic cache key
 3. Reads `TripGenerationCacheTable`; on hit, reuses the cached trip payload without calling OpenAI
-4. On cache miss, runs independent OpenAI GPT prompts in parallel with `Promise.all`:
-   - logistics: IATA codes, flights, hotels, car rentals, cost summary
+4. On cache miss, calls Amadeus for real provider data:
+   - flights
+   - hotels
+   - cost summary from returned offers
+5. Runs AI prompts in parallel with short per-section deadlines:
    - itinerary
    - restaurants
    - travel tips
-5. Combines the section payloads, writes the reusable payload to cache, generates a fresh `tripId` (uuid v4), writes to `TripResultsTable`
-6. Returns full result synchronously — no polling required
+6. Any AI section that misses the deadline is returned empty with a warning, not locally fabricated
+7. Combines the payloads, generates a fresh `tripId`, writes to `TripResultsTable`
+8. Returns full result synchronously — no polling required
 
 ### Latency Strategy
+- **Target response:** 2-5 seconds for `/generate`, including first-time cache misses.
 - **Cache first:** identical trip searches within the TTL avoid OpenAI latency and cost.
-- **Parallel model calls:** cache misses wait on the slowest section prompt instead of one large all-in-one prompt.
+- **Truthful logistics:** flights and hotels come from Amadeus; AI is not used as an inventory database.
+- **Strict provider mode:** no provider credentials means no generated logistics response.
+- **Fast AI:** itinerary/tips/restaurants are attempted with short deadlines; empty sections are allowed rather than fabricated.
+- **Parallel model calls:** OpenAI enriches itinerary/tips/restaurants opportunistically; it is not allowed to hold the request open near API Gateway limits.
 - **Smaller JSON surfaces:** each prompt returns a narrower schema, lowering parse failures and retry pressure.
 - **Fresh trip ids:** cached payloads are reused, but every request still gets a unique persisted result.
+- **MVP limitation:** real-time car rental inventory is not implemented yet.
 
 Tuneables:
-- `OPENAI_MODEL` defaults to `gpt-4o`
+- `OPENAI_MODEL` defaults to `gpt-4o-mini`
+- `OPENAI_SECTION_TIMEOUT_MS` defaults to `1000`
+- `AMADEUS_BASE_URL` defaults to `https://test.api.amadeus.com`; use production only after Amadeus production approval
+- `AMADEUS_REQUEST_TIMEOUT_MS` defaults to `4500`
 - `TRIP_CACHE_TTL_SECONDS` defaults to `86400`; set to `0` to disable writes while leaving reads harmless if no table is configured
 
-**Critical:** `OPENAI_API_KEY` must be exported in the shell before `cdk deploy`. It is injected as a Lambda env var at deploy time via `process.env.OPENAI_API_KEY`. If missing, the function returns HTTP 500.
+**Critical:** `OPENAI_API_KEY`, `AMADEUS_CLIENT_ID`, and `AMADEUS_CLIENT_SECRET` must be exported in the shell before `cdk deploy`. They are injected as Lambda env vars at deploy time. If OpenAI is missing, the function returns HTTP 500; if Amadeus is missing, `/generate` returns HTTP 503.
 
 ---
 
@@ -133,7 +214,7 @@ Tuneables:
 ### Prerequisites
 - Node.js ≥ 18, npm ≥ 7
 - AWS CLI configured for account `766796016263`
-- `OPENAI_API_KEY` exported in shell
+- `OPENAI_API_KEY`, `AMADEUS_CLIENT_ID`, and `AMADEUS_CLIENT_SECRET` exported in shell
 
 ### Build
 ```bash
@@ -152,12 +233,14 @@ cd ../infra && npm install && npm run build
 ### First-time CDK bootstrap (once per account/region)
 ```bash
 cd infra
-npx cdk bootstrap aws://766796016263/us-west-2
+npx cdk bootstrap aws://766796016263/us-east-1
 ```
 
 ### Deploy
 ```bash
 export OPENAI_API_KEY=sk-...
+export AMADEUS_CLIENT_ID=...
+export AMADEUS_CLIENT_SECRET=...
 npx cdk deploy GoNowBackendStack --require-approval never
 ```
 
@@ -200,6 +283,7 @@ Upserts preferences. DynamoDB key: `PK=USER#{cognitoSub}`, `SK=PREFERENCES`.
 | Symptom | Cause | Fix |
 |---------|-------|-----|
 | `POST /generate` → 500 "OpenAI API key not configured" | `OPENAI_API_KEY` missing at deploy time | Re-deploy with key exported |
+| `POST /generate` → 503 "Real travel provider is not configured" | `AMADEUS_CLIENT_ID` or `AMADEUS_CLIENT_SECRET` missing at deploy time | Re-deploy with Amadeus credentials exported |
 | Repeat `/generate` calls still hit OpenAI | Cache table missing, TTL expired, or request fields differ after normalization | Confirm `TRIP_CACHE_TABLE_NAME`, inspect `TripGenerationCacheTable`, compare request payloads |
 | CDK deploy fails with auth error | AWS CLI not configured | `aws configure` or set `AWS_PROFILE` |
 | `No workspaces found` npm error | Running npm inside a sub-package | Run from `TravelPlanService` root |

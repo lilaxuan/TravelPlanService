@@ -263,8 +263,12 @@ class GoNowBackendStack extends aws_cdk_lib_1.Stack {
                 TRIP_CACHE_TABLE_NAME: tripCacheTable.tableName,
                 TRIP_CACHE_TTL_SECONDS: '86400',
                 OPENAI_MODEL: 'gpt-4o-mini',
-                OPENAI_SECTION_TIMEOUT_MS: '18000',
+                OPENAI_SECTION_TIMEOUT_MS: '1000',
                 OPENAI_API_KEY: process.env.OPENAI_API_KEY ?? '',
+                AMADEUS_BASE_URL: process.env.AMADEUS_BASE_URL ?? 'https://test.api.amadeus.com',
+                AMADEUS_CLIENT_ID: process.env.AMADEUS_CLIENT_ID ?? '',
+                AMADEUS_CLIENT_SECRET: process.env.AMADEUS_CLIENT_SECRET ?? '',
+                AMADEUS_REQUEST_TIMEOUT_MS: process.env.AMADEUS_REQUEST_TIMEOUT_MS ?? '4500',
             },
         });
         resultsTable.grantReadWriteData(generateTripFn);

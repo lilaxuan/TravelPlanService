@@ -1,14 +1,14 @@
 import type { APIGatewayProxyHandlerV2 } from 'aws-lambda';
 import { GetCommand, PutCommand } from '@aws-sdk/lib-dynamodb';
 import { randomUUID } from 'node:crypto';
-import { getAmadeusLogistics, ProviderConfigurationError } from '../clients/amadeus.js';
 import { ddb } from '../clients/dynamo.js';
 import { jsonResponse } from '../utils/response.js';
 
 const RESULTS_TABLE = process.env.RESULTS_TABLE_NAME!;
 const TRIP_CACHE_TABLE = process.env.TRIP_CACHE_TABLE_NAME;
 const CACHE_TTL_SECONDS = Number(process.env.TRIP_CACHE_TTL_SECONDS ?? 86_400);
-const OPENAI_SECTION_TIMEOUT_MS = Number(process.env.OPENAI_SECTION_TIMEOUT_MS ?? 1_000);
+const OPENAI_SECTION_TIMEOUT_MS = Number(process.env.OPENAI_SECTION_TIMEOUT_MS ?? 25_000);
+const PROMPT_VERSION = 'itinerary-map-v3';
 
 interface TripInput {
   departureCity: string;
@@ -37,6 +37,106 @@ function tripLengthInNights(startDate: string, endDate: string): number {
   return Math.max(1, Math.round((new Date(endDate).getTime() - new Date(startDate).getTime()) / 86_400_000));
 }
 
+function cityCode(city: string): string {
+  const letters = city.replace(/[^a-z]/gi, '').toUpperCase();
+  return (letters.slice(0, 3) || 'AIR').padEnd(3, 'X');
+}
+
+function buildStaticLogistics(input: TripInput): Pick<
+  GeneratedTripPayload,
+  'departureIata' | 'destinationIata' | 'flights' | 'hotels' | 'carRentals' | 'costSummary'
+> {
+  const nights = tripLengthInNights(input.startDate, input.endDate);
+  const departureIata = cityCode(input.departureCity);
+  const destinationIata = cityCode(input.destinationCity);
+  const flightBase = Math.max(180, Math.round((input.budget * 0.18) / Math.max(1, input.travelers)));
+  const nightlyBase = Math.max(120, Math.round((input.budget * 0.32) / nights));
+  const carBase = Math.max(180, nights * 58);
+  const flightTotal = flightBase * input.travelers;
+  const hotelTotal = nightlyBase * nights;
+  const foodEstimate = Math.round(70 * input.travelers * nights);
+  const activitiesEstimate = Math.round(45 * input.travelers * Math.max(1, nights - 1));
+
+  return {
+    departureIata,
+    destinationIata,
+    flights: [
+      {
+        airline: 'Flexible fare search',
+        flightNumber: `${departureIata}-${destinationIata}`,
+        departure: `${departureIata} morning`,
+        arrival: `${destinationIata} afternoon`,
+        estimatedPrice: flightBase,
+        duration: 'Search live times',
+        stops: 'Best available',
+        isLiveSearch: true,
+        priceLabel: 'Estimate only',
+        recommendationReason: 'Static planning option; open a provider to confirm live flight inventory.',
+      },
+      {
+        airline: 'Budget fare search',
+        flightNumber: `${departureIata}-${destinationIata}-VALUE`,
+        departure: `${departureIata} flexible`,
+        arrival: `${destinationIata} flexible`,
+        estimatedPrice: Math.max(120, flightBase - 45),
+        duration: 'Search live times',
+        stops: 'Lowest fare focus',
+        isLiveSearch: true,
+        priceLabel: 'Estimate only',
+        recommendationReason: 'Static planning option for price-sensitive searches.',
+      },
+    ],
+    hotels: [
+      {
+        name: `${input.destinationCity} Central Hotel Search`,
+        area: 'Central / transit-friendly area',
+        estimatedNightlyPrice: nightlyBase,
+        totalEstimatedPrice: hotelTotal,
+        starRating: 4,
+        highlights: 'Recommended search area for first-time visitors, transit access, and easy dinner plans.',
+        isLiveSearch: true,
+        priceLabel: 'Estimate only',
+      },
+      {
+        name: `${input.destinationCity} Neighborhood Stay Search`,
+        area: 'Local neighborhood option',
+        estimatedNightlyPrice: Math.max(95, nightlyBase - 35),
+        totalEstimatedPrice: Math.max(95, nightlyBase - 35) * nights,
+        starRating: 3,
+        highlights: 'Recommended search area for better value and a more local base.',
+        isLiveSearch: true,
+        priceLabel: 'Estimate only',
+      },
+    ],
+    carRentals: [
+      {
+        provider: 'Airport rental search',
+        estimatedTotalPrice: carBase,
+        pickupLocation: `${input.destinationCity} airport`,
+        bookingUrl: `https://www.expedia.com/Cars?pickup=${encodeURIComponent(input.destinationCity)}&startDate=${input.startDate}&endDate=${input.endDate}`,
+        isLiveSearch: true,
+        priceLabel: 'Estimate only',
+      },
+      {
+        provider: 'City pickup rental search',
+        estimatedTotalPrice: Math.max(160, carBase - 40),
+        pickupLocation: `${input.destinationCity} city center`,
+        bookingUrl: `https://www.kayak.com/cars/${encodeURIComponent(input.destinationCity)}/${input.startDate}/${input.endDate}`,
+        isLiveSearch: true,
+        priceLabel: 'Estimate only',
+      },
+    ],
+    costSummary: {
+      flights: flightTotal,
+      hotels: hotelTotal,
+      carRental: carBase,
+      foodEstimate,
+      activitiesEstimate,
+      total: flightTotal + hotelTotal + carBase + foodEstimate + activitiesEstimate,
+    },
+  };
+}
+
 function baseTripContext(input: TripInput): string {
   const nights = tripLengthInNights(input.startDate, input.endDate);
 
@@ -59,8 +159,19 @@ Return JSON matching:
   "itinerary": [{ "dayNumber": number, "theme": string, "activities": [{ "time": string, "name": string, "type": string, "notes": string | undefined, "transportFromPrevious": string | undefined, "lat": number, "lng": number }] }]
 }
 Requirements:
-- Build a day-by-day itinerary for all ${nights} nights covering popular attractions, local food, and hidden gems
-- For each activity include travel time/distance from previous spot in "transportFromPrevious" and accurate GPS coordinates (lat, lng)`;
+- Do not generate flight, hotel, car rental, price, or booking inventory. The service provides those static planning options separately.
+- Build a detailed day-by-day itinerary for every calendar day between ${input.startDate} and ${input.endDate}. Use dayNumber 1 through ${nights}.
+- Each day must include 4-6 chronological activities with realistic times from morning through evening.
+- Each activity must be a real, mappable place in or near ${input.destinationCity}. Use specific place names, not generic labels like "museum", "downtown walk", or "local lunch".
+- Every activity must include numeric "lat" and "lng" coordinates that Google Maps can plot. Do not omit coordinates. Use the best-known entrance/center coordinates for the place.
+- Cluster each day geographically so the map route is practical instead of jumping across the city.
+- "transportFromPrevious" must describe the route from the previous activity to this activity using this format: "From [previous place]: [walk/drive/transit] about [minutes] min, [miles] mi / [kilometers] km." Use both miles and kilometers for every transition.
+- For the first activity of each day, "transportFromPrevious" must describe the route from the recommended hotel/base area using the same format, including estimated drive or walk time, miles, and kilometers.
+- Choose walk for short urban transfers, transit when it is practical, and drive/rideshare for longer transfers. Keep the estimate realistic for normal traffic and walking speed.
+- "notes" must explain why the stop fits the user's destination, dates, budget, and traveler count, plus any reservation/ticket timing advice.
+- Use activity "type" values such as "attraction", "restaurant", "culture", "nature", "shopping", "viewpoint", "transport", or "free_time".
+- Include meals as activities when they are part of the day's flow, and make those meal stops match the restaurants list when sensible.
+- Keep the pacing realistic for ${input.travelers} traveler${input.travelers === 1 ? '' : 's'} and leave buffers between major stops.`;
 }
 
 function buildRestaurantsPrompt(input: TripInput): string {
@@ -86,7 +197,7 @@ Requirements:
 - Include weather summary, clothing recommendations, visa requirements, local transportation notes, and pre-travel reminders`;
 }
 
-async function requestJsonSection<T extends Record<string, unknown>>(apiKey: string, prompt: string): Promise<T> {
+async function requestJsonSection<T extends Record<string, unknown>>(apiKey: string, prompt: string, maxTokens = 1800): Promise<T> {
   const response = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
     headers: {
@@ -98,7 +209,7 @@ async function requestJsonSection<T extends Record<string, unknown>>(apiKey: str
       response_format: { type: 'json_object' },
       messages: [{ role: 'user', content: prompt }],
       temperature: 0.5,
-      max_tokens: 1800,
+      max_tokens: maxTokens,
     }),
     signal: AbortSignal.timeout(OPENAI_SECTION_TIMEOUT_MS),
   });
@@ -138,6 +249,7 @@ async function buildCacheKey(input: TripInput): Promise<string> {
     budget: Number(input.budget),
     travelers: Number(input.travelers),
     preferences: input.preferences ?? {},
+    promptVersion: PROMPT_VERSION,
   };
 
   return sha256(stableStringify(normalized));
@@ -173,17 +285,14 @@ async function putCachedPayload(cacheKey: string, result: GeneratedTripPayload):
 }
 
 async function generateTripPayload(apiKey: string, input: TripInput): Promise<GeneratedTripPayload> {
-  const [logisticsResult, itineraryResult, restaurantsResult, tipsResult] = await Promise.allSettled([
-    getAmadeusLogistics(input),
-    requestJsonSection<Record<string, unknown>>(apiKey, buildItineraryPrompt(input)),
+  const staticLogistics = buildStaticLogistics(input);
+  const [itineraryResult, restaurantsResult, tipsResult] = await Promise.allSettled([
+    requestJsonSection<Record<string, unknown>>(apiKey, buildItineraryPrompt(input), 5000),
     requestJsonSection<Record<string, unknown>>(apiKey, buildRestaurantsPrompt(input)),
     requestJsonSection<Record<string, unknown>>(apiKey, buildTipsPrompt(input)),
   ]);
 
   const warnings: string[] = [];
-  if (logisticsResult.status === 'rejected') throw logisticsResult.reason;
-  warnings.push(...logisticsResult.value.warnings);
-
   function sectionValue(result: PromiseSettledResult<Record<string, unknown>>, sectionName: string): Record<string, unknown> {
     if (result.status === 'fulfilled') return result.value;
     warnings.push(`${sectionName} generation timed out or failed; no generated ${sectionName.toLowerCase()} was returned.`);
@@ -196,15 +305,15 @@ async function generateTripPayload(apiKey: string, input: TripInput): Promise<Ge
   const tips = sectionValue(tipsResult, 'Travel tips');
 
   return {
-    departureIata: logisticsResult.value.departureIata,
-    destinationIata: logisticsResult.value.destinationIata,
-    flights: logisticsResult.value.flights,
-    hotels: logisticsResult.value.hotels,
-    carRentals: logisticsResult.value.carRentals,
+    departureIata: staticLogistics.departureIata,
+    destinationIata: staticLogistics.destinationIata,
+    flights: staticLogistics.flights,
+    hotels: staticLogistics.hotels,
+    carRentals: staticLogistics.carRentals,
     itinerary: Array.isArray(itinerary.itinerary) ? itinerary.itinerary : [],
     restaurants: Array.isArray(restaurants.restaurants) ? restaurants.restaurants : [],
     travelTips: (tips.travelTips && typeof tips.travelTips === 'object') ? tips.travelTips as Record<string, unknown> : {},
-    costSummary: logisticsResult.value.costSummary,
+    costSummary: staticLogistics.costSummary,
     warnings,
   };
 }
@@ -257,10 +366,6 @@ export const handler: APIGatewayProxyHandlerV2 = async (event) => {
 
     return jsonResponse(200, result);
   } catch (error) {
-    if (error instanceof ProviderConfigurationError) {
-      return jsonResponse(error.statusCode, { error: error.message });
-    }
-
     return jsonResponse(500, { error: error instanceof Error ? error.message : 'Unknown error' });
   }
 };
